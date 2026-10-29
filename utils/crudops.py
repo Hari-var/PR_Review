@@ -29,12 +29,12 @@ from models.schemas import (
     WorkItemAttachmentCreate, WorkItemAttachmentUpdate,
     WorkItemCommentCreate, WorkItemCommentUpdate,
     WorkItemDetailsCreate, WorkItemDetailsFullCreate, WorkItemDetailsUpdate,
-    WorkItemLinkCreate, WorkItemLinkUpdate,
+    WorkItemLinkCreate, WorkItemLinkUpdate,LLMIOMonitorCreate, LLMIOMonitorUpdate,
 )
 from models.tables import (
     Attachment_Document, PR_ChangedFile, PR_Comment, PR_CommentThread, PR_Commit,
     PR_Details, PR_Reviewer, WorkItem_Attachment, WorkItem_Comment, WorkItem_Details,
-    WorkItem_Link, pr_work_items,
+    WorkItem_Link, pr_work_items,LLM_IO_monitor, 
 )
 
 ModelT = TypeVar("ModelT")
@@ -94,6 +94,14 @@ class BaseCRUD(Generic[ModelT, CreateT, UpdateT]):
         return self.db.scalars(stmt).all()
 
 
+
+# ============================================================ LLM_IO_monitor
+class LLMIOMonitorCRUD(BaseCRUD[LLM_IO_monitor, LLMIOMonitorCreate, LLMIOMonitorUpdate]):
+    model = LLM_IO_monitor
+
+    def get_by_pr(self, pr_id: int) -> Sequence[LLM_IO_monitor]:
+        return self._by_fk(LLM_IO_monitor.pr_details_id, pr_id)
+    
 # ================================================================ PR_Details
 class PRDetailsCRUD(BaseCRUD[PR_Details, PRDetailsCreate, PRDetailsUpdate]):
     model = PR_Details

@@ -1,22 +1,30 @@
 import asyncio
 import hmac
+import inspect
 import logging
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from utils.ado_client import AdoClient
+from utils.ado_comments import post_pr_comment                      # NEW
 from utils.aggregator import extract_pr
 from utils.config import get_settings
 from utils.persistence import persist_extraction
+from utils.prompt_builder import build_review_prompt                # NEW
 from database.database import db_manager
-from utils.crudops import PRDetailsCRUD, WorkItemDetailsCRUD
+from utils.crudops import LLMIOMonitorCRUD, PRDetailsCRUD, WorkItemDetailsCRUD   # CHANGED
 from .deps import get_db
-from models.schemas import PRDetailsDetailResponse, WorkItemDetailsDetailResponse
+from models.schemas import (                                         # CHANGED
+    LLMIOMonitorCreate, PRDetailsDetailResponse, WorkItemDetailsDetailResponse)
+from utils.llm import get_azure_response
 
 log = logging.getLogger("ado-pr-extractor")
 router = APIRouter()
+
+ERROR_PREFIX = "[ERROR] "
+COMMENT_STATUS = "closed"   # "closed" never blocks merge policies; use "active" to make it prominent
 
 
 def _verify(secret_expected: str, provided: str | None):
@@ -51,13 +59,84 @@ async def _extract_and_store(project: str, repo_id: str, pr_id: int) -> dict:
     return result
 
 
+# ------------------------------------------------------------------ NEW: LLM review
+def _already_reviewed(pr_db_id: int) -> bool:
+    with db_manager.get_session() as db:
+        return any(not r.response.startswith(ERROR_PREFIX)
+                   for r in LLMIOMonitorCRUD(db).get_by_pr(pr_db_id))
+
+
+def _store_llm_io(pr_db_id: int, prompt: str, response: str) -> None:
+    with db_manager.get_session() as db:
+        LLMIOMonitorCRUD(db).create(
+            LLMIOMonitorCreate(pr_details_id=pr_db_id, prompt=prompt, response=response))
+
+
+async def _call_llm(prompt: str) -> str:
+    # ASSUMPTION: get_azure_response(prompt) -> str (sync or async).
+    # If your function takes more arguments or returns an object, adapt ONLY this function.
+    if inspect.iscoroutinefunction(get_azure_response):
+        out = await get_azure_response(prompt)
+    else:
+        out = await asyncio.to_thread(get_azure_response, prompt)
+    text = out if isinstance(out, str) else str(out)
+    if not text.strip():
+        raise ValueError("LLM returned an empty response")
+    return text
+
+
+async def _review_and_comment(result: dict, project: str, repo_id: str, pr_id: int,
+                              force: bool = False) -> dict:
+    pr_db_id = (result.get("persistence") or {}).get("pr_id")
+    if not pr_db_id:
+        return {"status": "skipped", "reason": "PR was not saved, so the LLM record cannot be linked"}
+    if not force and await asyncio.to_thread(_already_reviewed, pr_db_id):
+        return {"status": "skipped", "reason": "already reviewed (use force to re-run)"}
+
+    prompt = build_review_prompt(result)
+    try:
+        report = await _call_llm(prompt)
+    except Exception as e:  # noqa: BLE001
+        log.exception("LLM call failed for PR %s", pr_id)
+        await asyncio.to_thread(_store_llm_io, pr_db_id, prompt, f"{ERROR_PREFIX}{e}")
+        return {"status": "failed", "stage": "llm", "error": str(e)}
+
+    await asyncio.to_thread(_store_llm_io, pr_db_id, prompt, report)   # keep the report even if posting fails
+    try:
+        cfg = get_settings()
+        thread_id = await post_pr_comment(cfg.org_url, cfg.pat, project, repo_id, pr_id,
+                                          report, status=COMMENT_STATUS)
+    except Exception as e:  # noqa: BLE001
+        log.exception("posting PR comment failed for PR %s", pr_id)
+        return {"status": "failed", "stage": "comment", "error": str(e), "llm_record_saved": True}
+    return {"status": "completed", "comment_thread_id": thread_id}
+
+
+async def _process_pr(project: str, repo_id: str, pr_id: int, force: bool = False) -> dict:
+    result = await _extract_and_store(project, repo_id, pr_id)
+    result["review"] = await _review_and_comment(result, project, repo_id, pr_id, force)
+    return result
+
+
+async def _process_pr_background(project: str, repo_id: str, pr_id: int) -> None:
+    try:
+        outcome = await _process_pr(project, repo_id, pr_id)
+        log.info("PR %s processed: persistence=%s review=%s", pr_id,
+                 outcome.get("persistence"), outcome.get("review"))
+    except Exception:  # noqa: BLE001
+        log.exception("background processing of PR %s failed", pr_id)
+
+
+# ------------------------------------------------------------------------ endpoints
 @router.get("/health")
 async def health():
     return {"status": "ok"}
 
 
-@router.post("/webhook/pr-created")
-async def pr_created(request: Request, x_webhook_secret: str | None = Header(default=None)):
+@router.post("/webhook/pr-created", status_code=202)
+async def pr_created(request: Request, background_tasks: BackgroundTasks,
+                     x_webhook_secret: str | None = Header(default=None)):
+    """Acknowledge immediately (ADO times out quickly); extract, save, review and comment in the background."""
     _verify(get_settings().webhook_secret, x_webhook_secret)
     body = await request.json()
     if body.get("eventType") != "git.pullrequest.created":
@@ -65,11 +144,9 @@ async def pr_created(request: Request, x_webhook_secret: str | None = Header(def
     res = body["resource"]
     repo = res["repository"]
     project = repo.get("project", {}).get("name")
-    try:
-        return await _extract_and_store(project, repo["id"], int(res["pullRequestId"]))
-    except Exception as e:  # noqa: BLE001  (extraction itself failed)
-        log.exception("extraction failed")
-        raise HTTPException(status_code=502, detail=f"extraction failed: {e}")
+    pr_id = int(res["pullRequestId"])
+    background_tasks.add_task(_process_pr_background, project, repo["id"], pr_id)
+    return {"accepted": True, "pull_request_id": pr_id}
 
 
 @router.get("/results/{repo_id}/{pr_id}")
@@ -91,8 +168,9 @@ def get_result(repo_id: str, pr_id: int, x_webhook_secret: str | None = Header(d
 
 
 @router.post("/extract/{project}/{repo_id}/{pr_id}")
-async def manual_extract(project: str, repo_id: str, pr_id: int,
+async def manual_extract(project: str, repo_id: str, pr_id: int, force: bool = False,
                          x_webhook_secret: str | None = Header(default=None)):
-    """Manual trigger for testing without the service hook (re-extracts and re-saves)."""
+    """Synchronous run for testing: extract, save, review, comment, and return everything.
+    Skips the LLM step if the PR was already reviewed, unless ?force=true."""
     _verify(get_settings().webhook_secret, x_webhook_secret)
-    return await _extract_and_store(project, repo_id, pr_id)
+    return await _process_pr(project, repo_id, pr_id, force)

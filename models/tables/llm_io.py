@@ -8,7 +8,7 @@ from database.database import Base
 class LLM_IO_monitor(Base):
     __tablename__ = "llm_io_monitor"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    pr_details_id: Mapped[int] = mapped_column(Integer, ForeignKey("pr_details.id"))
+    pr_details_id: Mapped[int] = mapped_column(Integer, ForeignKey("pr_details.id", ondelete="CASCADE"))
     prompt: Mapped[str] = mapped_column(Text)
     response: Mapped[str] = mapped_column(Text)
 

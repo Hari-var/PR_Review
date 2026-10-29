@@ -26,3 +26,9 @@ def get_settings() -> Settings:
 
 class DataBase_config:
     cloud_db = os.environ.get("DB_conn_str", "")
+
+class Content_generator_model_config:
+    AI_content_version = os.environ.get("AI_content_version","")
+    AI_content_endpoint = os.environ.get("AI_content_endpoint","")
+    AI_content_key = os.environ.get("AI_content_key","")
+    AI_content_model = os.environ.get("AI_content_model","")

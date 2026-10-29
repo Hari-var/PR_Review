@@ -25,7 +25,23 @@ def _partial(name: str, base: type[BaseModel]) -> type[BaseModel]:
     fields = {n: (Optional[f.annotation], None) for n, f in base.model_fields.items()}
     return create_model(name, **fields)  # type: ignore[call-overload]
 
+# ======================================================== LLM_IO_monitor
+class LLMIOMonitorBase(BaseModel):
+    prompt: str
+    response: str
 
+
+class LLMIOMonitorCreate(LLMIOMonitorBase):
+    pr_details_id: int
+
+
+LLMIOMonitorUpdate = _partial("LLMIOMonitorUpdate", LLMIOMonitorCreate)
+
+
+class LLMIOMonitorResponse(ORMModel, LLMIOMonitorBase):
+    # your model has no TimestampMixin, so no created_at/updated_at here
+    id: int
+    pr_details_id: int
 # =============================================================== PR_Details
 class PRDetailsBase(BaseModel):
     pull_request_id: int
@@ -324,3 +340,4 @@ class PRDetailsDetailResponse(PRDetailsResponse):
     changed_files: list[PRChangedFileResponse] = Field(default_factory=list)
     comment_threads: list[PRCommentThreadDetailResponse] = Field(default_factory=list)
     work_items: list[WorkItemDetailsResponse] = Field(default_factory=list)
+    llm_response: list[LLMIOMonitorResponse] = Field(default_factory=list)

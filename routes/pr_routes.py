@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from utils.crudops import (
     PRChangedFileCRUD, PRCommentCRUD, PRCommentThreadCRUD, PRCommitCRUD,
-    PRDetailsCRUD, PRReviewerCRUD, PRWorkItemLinkCRUD, WorkItemDetailsCRUD,
+    PRDetailsCRUD, PRReviewerCRUD, PRWorkItemLinkCRUD, WorkItemDetailsCRUD, LLMIOMonitorCRUD,
 )
 from models.schemas import (
     PRChangedFileCreate, PRChangedFileResponse, PRChangedFileUpdate,
@@ -14,7 +14,7 @@ from models.schemas import (
     PRCommentThreadUpdate, PRCommentUpdate, PRCommitCreate, PRCommitResponse, PRCommitUpdate,
     PRDetailsCreate, PRDetailsDetailResponse, PRDetailsFullCreate, PRDetailsResponse,
     PRDetailsUpdate, PRReviewerCreate, PRReviewerResponse, PRReviewerUpdate,
-    PRWorkItemLinkCreate, PRWorkItemLinkResponse, WorkItemDetailsResponse,
+    PRWorkItemLinkCreate, PRWorkItemLinkResponse, WorkItemDetailsResponse, LLMIOMonitorCreate, LLMIOMonitorResponse, LLMIOMonitorUpdate,
 )
 from .crud_factory import build_crud_router
 from .deps import conflict_as_409, get_db, or_404
@@ -123,5 +123,9 @@ for cfg in (
     dict(prefix="/pr-comments", tag="PR comments", label="pr_comment", crud_cls=PRCommentCRUD,
          create_schema=PRCommentCreate, update_schema=PRCommentUpdate,
          response_schema=PRCommentResponse, list_by=("thread_id", "get_by_thread")),
+    dict(prefix="/llm-io-monitor", tag="LLM IO monitor", label="llm_io_monitor",
+         crud_cls=LLMIOMonitorCRUD, create_schema=LLMIOMonitorCreate,
+         update_schema=LLMIOMonitorUpdate, response_schema=LLMIOMonitorResponse,
+         list_by=("pr_details_id", "get_by_pr")),
 ):
     router.include_router(build_crud_router(**cfg))
