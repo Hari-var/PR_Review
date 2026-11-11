@@ -14,11 +14,12 @@ from __future__ import annotations
 from typing import Any, Generic, Optional, Sequence, TypeVar
 
 from pydantic import BaseModel
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
 from models.schemas import (
+    LLMIOMonitorCreate, LLMIOMonitorUpdate,
     AttachmentDocumentCreate, AttachmentDocumentUpdate,
     PRChangedFileCreate, PRChangedFileUpdate,
     PRCommentCreate, PRCommentThreadCreate, PRCommentThreadUpdate, PRCommentUpdate,
@@ -29,12 +30,13 @@ from models.schemas import (
     WorkItemAttachmentCreate, WorkItemAttachmentUpdate,
     WorkItemCommentCreate, WorkItemCommentUpdate,
     WorkItemDetailsCreate, WorkItemDetailsFullCreate, WorkItemDetailsUpdate,
-    WorkItemLinkCreate, WorkItemLinkUpdate,LLMIOMonitorCreate, LLMIOMonitorUpdate,
+    WorkItemLinkCreate, WorkItemLinkUpdate,
 )
 from models.tables import (
+    LLM_IO_monitor,
     Attachment_Document, PR_ChangedFile, PR_Comment, PR_CommentThread, PR_Commit,
     PR_Details, PR_Reviewer, WorkItem_Attachment, WorkItem_Comment, WorkItem_Details,
-    WorkItem_Link, pr_work_items,LLM_IO_monitor, 
+    WorkItem_Link, pr_work_items,
 )
 
 ModelT = TypeVar("ModelT")
@@ -94,20 +96,14 @@ class BaseCRUD(Generic[ModelT, CreateT, UpdateT]):
         return self.db.scalars(stmt).all()
 
 
-
-# ============================================================ LLM_IO_monitor
-class LLMIOMonitorCRUD(BaseCRUD[LLM_IO_monitor, LLMIOMonitorCreate, LLMIOMonitorUpdate]):
-    model = LLM_IO_monitor
-
-    def get_by_pr(self, pr_id: int) -> Sequence[LLM_IO_monitor]:
-        return self._by_fk(LLM_IO_monitor.pr_details_id, pr_id)
-    
 # ================================================================ PR_Details
 class PRDetailsCRUD(BaseCRUD[PR_Details, PRDetailsCreate, PRDetailsUpdate]):
     model = PR_Details
 
-    def get_by_ado(self, repository_id: str, pull_request_id: int) -> Optional[PR_Details]:
+    def get_by_source(self, source_system: str, repository_id: str,
+                      pull_request_id: int) -> Optional[PR_Details]:
         stmt = select(PR_Details).where(
+            PR_Details.source_system == source_system,
             PR_Details.repository_id == repository_id,
             PR_Details.pull_request_id == pull_request_id)
         return self.db.scalars(stmt).first()
@@ -123,8 +119,11 @@ class PRDetailsCRUD(BaseCRUD[PR_Details, PRDetailsCreate, PRDetailsUpdate]):
         return self.db.scalars(stmt).first()
 
     def search(self, project: Optional[str] = None, status: Optional[str] = None,
-               skip: int = 0, limit: int = 100) -> Sequence[PR_Details]:
+               skip: int = 0, limit: int = 100,
+               source_system: Optional[str] = None) -> Sequence[PR_Details]:
         stmt = select(PR_Details).order_by(PR_Details.id.desc())
+        if source_system:
+            stmt = stmt.where(PR_Details.source_system == source_system)
         if project:
             stmt = stmt.where(PR_Details.project == project)
         if status:
@@ -132,10 +131,10 @@ class PRDetailsCRUD(BaseCRUD[PR_Details, PRDetailsCreate, PRDetailsUpdate]):
         return self.db.scalars(stmt.offset(skip).limit(limit)).all()
 
     def upsert(self, data: PRDetailsFullCreate) -> PR_Details:
-        """Insert or update by (repository_id, pull_request_id); child rows are replaced."""
-        children = {"reviewers", "commits", "changed_files", "comment_threads", "work_item_ado_ids"}
+        """Insert or update by (source_system, repository_id, pull_request_id); child rows are replaced."""
+        children = {"reviewers", "commits", "changed_files", "comment_threads", "work_item_refs"}
         payload = data.model_dump(exclude=children)
-        obj = self.get_by_ado(data.repository_id, data.pull_request_id)
+        obj = self.get_by_source(data.source_system, data.repository_id, data.pull_request_id)
         if obj is None:
             obj = PR_Details(**payload)
             self.db.add(obj)
@@ -150,9 +149,11 @@ class PRDetailsCRUD(BaseCRUD[PR_Details, PRDetailsCreate, PRDetailsUpdate]):
             PR_CommentThread(**t.model_dump(exclude={"comments"}),
                              comments=[PR_Comment(**c.model_dump()) for c in t.comments])
             for t in data.comment_threads]
-        if data.work_item_ado_ids:
-            obj.work_items = list(self.db.scalars(select(WorkItem_Details).where(
-                WorkItem_Details.ado_work_item_id.in_(data.work_item_ado_ids))).all())
+        if data.work_item_refs:
+            cond = or_(*[and_(WorkItem_Details.source_system == r.source_system,
+                              WorkItem_Details.external_id == r.external_id)
+                         for r in data.work_item_refs])
+            obj.work_items = list(self.db.scalars(select(WorkItem_Details).where(cond)).all())
         self._commit()
         self.db.refresh(obj)
         return obj
@@ -208,9 +209,10 @@ class PRCommentCRUD(BaseCRUD[PR_Comment, PRCommentCreate, PRCommentUpdate]):
 class WorkItemDetailsCRUD(BaseCRUD[WorkItem_Details, WorkItemDetailsCreate, WorkItemDetailsUpdate]):
     model = WorkItem_Details
 
-    def get_by_ado_id(self, ado_work_item_id: int) -> Optional[WorkItem_Details]:
+    def get_by_external(self, source_system: str, external_id: str) -> Optional[WorkItem_Details]:
         return self.db.scalars(select(WorkItem_Details).where(
-            WorkItem_Details.ado_work_item_id == ado_work_item_id)).first()
+            WorkItem_Details.source_system == source_system,
+            WorkItem_Details.external_id == external_id)).first()
 
     def get_detail(self, id: int) -> Optional[WorkItem_Details]:
         stmt = (select(WorkItem_Details).where(WorkItem_Details.id == id).options(
@@ -226,8 +228,11 @@ class WorkItemDetailsCRUD(BaseCRUD[WorkItem_Details, WorkItemDetailsCreate, Work
         return self.db.scalars(stmt).all()
 
     def search(self, work_item_type: Optional[str] = None, state: Optional[str] = None,
-               skip: int = 0, limit: int = 100) -> Sequence[WorkItem_Details]:
+               skip: int = 0, limit: int = 100,
+               source_system: Optional[str] = None) -> Sequence[WorkItem_Details]:
         stmt = select(WorkItem_Details).order_by(WorkItem_Details.id.desc())
+        if source_system:
+            stmt = stmt.where(WorkItem_Details.source_system == source_system)
         if work_item_type:
             stmt = stmt.where(WorkItem_Details.work_item_type == work_item_type)
         if state:
@@ -235,10 +240,10 @@ class WorkItemDetailsCRUD(BaseCRUD[WorkItem_Details, WorkItemDetailsCreate, Work
         return self.db.scalars(stmt.offset(skip).limit(limit)).all()
 
     def upsert(self, data: WorkItemDetailsFullCreate) -> WorkItem_Details:
-        """Insert or update by ADO work item id; comments, links, attachments(+docs) are replaced."""
+        """Insert or update by (source_system, external_id); comments, links, attachments(+docs) are replaced."""
         children = {"comments", "links", "attachments"}
         payload = data.model_dump(exclude=children)
-        obj = self.get_by_ado_id(data.ado_work_item_id)
+        obj = self.get_by_external(data.source_system, data.external_id)
         if obj is None:
             obj = WorkItem_Details(**payload)
             self.db.add(obj)
@@ -344,3 +349,11 @@ class PRWorkItemLinkCRUD:
             self.db.rollback()
             raise
         return res.rowcount > 0
+
+
+# ============================================================ LLM_IO_monitor
+class LLMIOMonitorCRUD(BaseCRUD[LLM_IO_monitor, LLMIOMonitorCreate, LLMIOMonitorUpdate]):
+    model = LLM_IO_monitor
+
+    def get_by_pr(self, pr_id: int) -> Sequence[LLM_IO_monitor]:
+        return self._by_fk(LLM_IO_monitor.pr_details_id, pr_id)

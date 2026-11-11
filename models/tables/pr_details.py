@@ -10,15 +10,17 @@ from .mixins import TimestampMixin
 
 class PR_Details(TimestampMixin, Base):
     __tablename__ = "pr_details"
-    __table_args__ = (UniqueConstraint("repository_id", "pull_request_id", name="uq_pr_repo_prid"),)
+    __table_args__ = (UniqueConstraint("source_system", "repository_id", "pull_request_id",
+                                       name="uq_pr_source_repo_prid"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
-    # ADO identity
-    pull_request_id: Mapped[int] = mapped_column(Integer, index=True)       # ADO PR number
-    repository_id: Mapped[str] = mapped_column(String(64), index=True)      # repo GUID
+    # source identity (works for any code host)
+    source_system: Mapped[str] = mapped_column(String(32), index=True)      # e.g. "azure_devops", "bitbucket"
+    pull_request_id: Mapped[int] = mapped_column(Integer, index=True)       # PR number on the source system
+    repository_id: Mapped[str] = mapped_column(String(128), index=True)     # stable repo id (GUID / UUID / numeric id)
     repository_name: Mapped[Optional[str]] = mapped_column(String(255))
-    project: Mapped[str] = mapped_column(String(255))
+    project: Mapped[str] = mapped_column(String(255))                       # project / workspace / project key
     web_url: Mapped[Optional[str]] = mapped_column(String(1024))
 
     # core fields
@@ -31,7 +33,7 @@ class PR_Details(TimestampMixin, Base):
     target_branch: Mapped[Optional[str]] = mapped_column(String(512))
     created_by_name: Mapped[Optional[str]] = mapped_column(String(255))
     created_by_email: Mapped[Optional[str]] = mapped_column(String(255))
-    creation_date: Mapped[Optional[datetime]] = mapped_column(DateTime)    # ADO-side creation time
+    creation_date: Mapped[Optional[datetime]] = mapped_column(DateTime)    # creation time on the source system
     labels: Mapped[Optional[list]] = mapped_column(JSON)
 
     # extraction bookkeeping
@@ -50,6 +52,6 @@ class PR_Details(TimestampMixin, Base):
         back_populates="pr", cascade="all, delete-orphan")
     work_items: Mapped[list["WorkItem_Details"]] = relationship(
         secondary="pr_work_items", back_populates="pull_requests")
+
     llm_response: Mapped[list["LLM_IO_monitor"]] = relationship(
         back_populates="pr", cascade="all, delete-orphan")
-

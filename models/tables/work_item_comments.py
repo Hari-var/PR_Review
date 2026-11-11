@@ -14,7 +14,7 @@ class WorkItem_Comment(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     work_item_id: Mapped[int] = mapped_column(
         ForeignKey("work_item_details.id", ondelete="CASCADE"), index=True)
-    ado_comment_id: Mapped[Optional[int]] = mapped_column(Integer)
+    external_id: Mapped[Optional[str]] = mapped_column(String(128))
     author: Mapped[Optional[str]] = mapped_column(String(255))
     text_markdown: Mapped[Optional[str]] = mapped_column(Text)
     commented_at: Mapped[Optional[datetime]] = mapped_column(DateTime)

@@ -13,7 +13,7 @@ class PR_CommentThread(TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     pr_id: Mapped[int] = mapped_column(ForeignKey("pr_details.id", ondelete="CASCADE"), index=True)
-    ado_thread_id: Mapped[Optional[int]] = mapped_column(Integer)
+    external_id: Mapped[Optional[str]] = mapped_column(String(128))
     status: Mapped[Optional[str]] = mapped_column(String(32))
     file_path: Mapped[Optional[str]] = mapped_column(String(1024))
 

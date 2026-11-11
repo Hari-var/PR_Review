@@ -34,7 +34,7 @@ def create_work_item(payload: WorkItemDetailsCreate, db: Session = Depends(get_d
 @wi.post("/upsert", response_model=WorkItemDetailsDetailResponse)
 def upsert_work_item(payload: WorkItemDetailsFullCreate, db: Session = Depends(get_db)):
     """Insert/update a work item with comments, links, attachments and converted documents
-    (matched on ado_work_item_id)."""
+    (matched on source_system + external_id)."""
     crud = WorkItemDetailsCRUD(db)
     with conflict_as_409():
         saved = crud.upsert(payload)
@@ -43,15 +43,16 @@ def upsert_work_item(payload: WorkItemDetailsFullCreate, db: Session = Depends(g
 
 @wi.get("", response_model=list[WorkItemDetailsResponse])
 def search_work_items(work_item_type: Optional[str] = None, state: Optional[str] = None,
+                      source_system: Optional[str] = None,
                       skip: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=1000),
                       db: Session = Depends(get_db)):
-    return list(WorkItemDetailsCRUD(db).search(work_item_type, state, skip, limit))
+    return list(WorkItemDetailsCRUD(db).search(work_item_type, state, skip, limit, source_system))
 
 
-@wi.get("/by-ado/{ado_work_item_id}", response_model=WorkItemDetailsDetailResponse)
-def get_work_item_by_ado(ado_work_item_id: int, db: Session = Depends(get_db)):
+@wi.get("/by-external/{source_system}/{external_id}", response_model=WorkItemDetailsDetailResponse)
+def get_work_item_by_external(source_system: str, external_id: str, db: Session = Depends(get_db)):
     crud = WorkItemDetailsCRUD(db)
-    found = or_404(crud.get_by_ado_id(ado_work_item_id), "Work item")
+    found = or_404(crud.get_by_external(source_system, external_id), "Work item")
     return crud.get_detail(found.id)
 
 

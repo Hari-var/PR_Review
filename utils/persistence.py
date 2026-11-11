@@ -16,16 +16,17 @@ from typing import Any, Optional
 from sqlalchemy.orm import Session
 
 from .crudops import PRDetailsCRUD, WorkItemDetailsCRUD
+from .constants import SOURCE_ADO
 from models.schemas import (
     AttachmentDocumentBase, PRChangedFileBase, PRCommentBase, PRCommentThreadNested,
     PRCommitBase, PRDetailsFullCreate, PRReviewerBase, WorkItemAttachmentNested,
-    WorkItemCommentBase, WorkItemDetailsFullCreate, WorkItemLinkBase,
+    WorkItemCommentBase, WorkItemDetailsFullCreate, WorkItemLinkBase, WorkItemRef,
 )
 
 
 # ------------------------------------------------------------------- helpers
 def _dt(value: Any) -> Optional[datetime]:
-    """ADO ISO string -> naive UTC datetime (ADO sends 7 fractional digits; Python takes 6)."""
+    """ISO timestamp -> naive UTC datetime (trims fractional digits beyond 6, which Python rejects)."""
     if not value:
         return None
     if isinstance(value, datetime):
@@ -59,7 +60,7 @@ def _s(v: Any) -> Optional[str]:
 
 
 # ------------------------------------------------------------------- mappers
-def to_work_item(wi: dict, project: Optional[str] = None) -> WorkItemDetailsFullCreate:
+def to_work_item(wi: dict) -> WorkItemDetailsFullCreate:
     assigned_name, assigned_email = _person(wi.get("assigned_to"))
     created_name, created_email = _person(wi.get("created_by"))
 
@@ -80,8 +81,9 @@ def to_work_item(wi: dict, project: Optional[str] = None) -> WorkItemDetailsFull
         ))
 
     return WorkItemDetailsFullCreate(
-        ado_work_item_id=int(wi["id"]),
-        project=project,
+        source_system=wi.get("source_system") or SOURCE_ADO,
+        external_id=str(wi["id"]),
+        project=wi.get("project"),
         url=wi.get("url"),
         work_item_type=wi.get("type"),
         title=wi.get("title"),
@@ -91,8 +93,8 @@ def to_work_item(wi: dict, project: Optional[str] = None) -> WorkItemDetailsFull
         severity=_s(wi.get("severity")),
         assigned_to_name=assigned_name, assigned_to_email=assigned_email,
         created_by_name=created_name, created_by_email=created_email,
-        ado_created_date=_dt(wi.get("created_date")),
-        ado_changed_date=_dt(wi.get("changed_date")),
+        source_created_at=_dt(wi.get("created_date")),
+        source_updated_at=_dt(wi.get("changed_date")),
         tags=wi.get("tags"),
         area_path=wi.get("area_path"),
         iteration_path=wi.get("iteration_path"),
@@ -104,7 +106,7 @@ def to_work_item(wi: dict, project: Optional[str] = None) -> WorkItemDetailsFull
         repro_steps_html=wi.get("repro_steps_html"),
         system_info_md=wi.get("system_info"),
         comments=[WorkItemCommentBase(
-            ado_comment_id=_int(c.get("id")), author=c.get("author"),
+            external_id=_s(c.get("id")), author=c.get("author"),
             text_markdown=c.get("text_markdown"), commented_at=_dt(c.get("created")))
             for c in wi.get("comments", [])],
         links=[WorkItemLinkBase(rel=l.get("rel"), url=l.get("url"), name=l.get("name"))
@@ -113,13 +115,14 @@ def to_work_item(wi: dict, project: Optional[str] = None) -> WorkItemDetailsFull
     )
 
 
-def to_pull_request(result: dict, repository_id: str, work_item_ado_ids: list[int],
+def to_pull_request(result: dict, repository_id: str, work_item_refs: list[WorkItemRef],
                     store_raw: bool = False) -> PRDetailsFullCreate:
     p = result["pull_request"]
     created_name, created_email = _person(p.get("created_by"))
     meta = result.get("meta", {})
 
     return PRDetailsFullCreate(
+        source_system=p.get("source_system") or SOURCE_ADO,
         pull_request_id=int(p["id"]),
         repository_id=repository_id,
         repository_name=p.get("repository"),
@@ -147,11 +150,11 @@ def to_pull_request(result: dict, repository_id: str, work_item_ado_ids: list[in
         changed_files=[PRChangedFileBase(path=f["path"], change_type=_s(f.get("change_type")))
                        for f in p.get("changed_files", []) if f.get("path")],
         comment_threads=[PRCommentThreadNested(
-            ado_thread_id=_int(t.get("id")), status=_s(t.get("status")), file_path=t.get("file"),
+            external_id=_s(t.get("id")), status=_s(t.get("status")), file_path=t.get("file"),
             comments=[PRCommentBase(author=c.get("author"), text=c.get("text"),
                                     published_at=_dt(c.get("published"))) for c in t.get("comments", [])])
             for t in p.get("comment_threads", [])],
-        work_item_ado_ids=work_item_ado_ids,
+        work_item_refs=work_item_refs,
     )
 
 
@@ -160,9 +163,10 @@ def persist_extraction(db: Session, result: dict, repository_id: str,
                        store_raw: bool = False) -> dict:
     """Save one extraction. Returns {"pr_id": <db id>, "work_item_ids": [<db ids>]}."""
     wi_crud = WorkItemDetailsCRUD(db)
-    project = result.get("pull_request", {}).get("project")
-    saved_wis = [wi_crud.upsert(to_work_item(wi, project)) for wi in result.get("work_items", [])]
+    saved_wis = [wi_crud.upsert(to_work_item(wi)) for wi in result.get("work_items", [])]
 
     pr = PRDetailsCRUD(db).upsert(to_pull_request(
-        result, repository_id, [w.ado_work_item_id for w in saved_wis], store_raw))
+        result, repository_id,
+        [WorkItemRef(source_system=w.source_system, external_id=w.external_id) for w in saved_wis],
+        store_raw))
     return {"pr_id": pr.id, "work_item_ids": [w.id for w in saved_wis]}

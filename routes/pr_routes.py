@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from utils.crudops import (
     PRChangedFileCRUD, PRCommentCRUD, PRCommentThreadCRUD, PRCommitCRUD,
-    PRDetailsCRUD, PRReviewerCRUD, PRWorkItemLinkCRUD, WorkItemDetailsCRUD, LLMIOMonitorCRUD,
+    PRDetailsCRUD, PRReviewerCRUD, PRWorkItemLinkCRUD, WorkItemDetailsCRUD,
 )
 from models.schemas import (
     PRChangedFileCreate, PRChangedFileResponse, PRChangedFileUpdate,
@@ -14,7 +14,7 @@ from models.schemas import (
     PRCommentThreadUpdate, PRCommentUpdate, PRCommitCreate, PRCommitResponse, PRCommitUpdate,
     PRDetailsCreate, PRDetailsDetailResponse, PRDetailsFullCreate, PRDetailsResponse,
     PRDetailsUpdate, PRReviewerCreate, PRReviewerResponse, PRReviewerUpdate,
-    PRWorkItemLinkCreate, PRWorkItemLinkResponse, WorkItemDetailsResponse, LLMIOMonitorCreate, LLMIOMonitorResponse, LLMIOMonitorUpdate,
+    PRWorkItemLinkCreate, PRWorkItemLinkResponse, WorkItemDetailsResponse,
 )
 from .crud_factory import build_crud_router
 from .deps import conflict_as_409, get_db, or_404
@@ -43,15 +43,19 @@ def upsert_pr(payload: PRDetailsFullCreate, db: Session = Depends(get_db)):
 
 @pr.get("", response_model=list[PRDetailsResponse])
 def search_prs(project: Optional[str] = None, status: Optional[str] = None,
+               source_system: Optional[str] = None,
                skip: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=1000),
                db: Session = Depends(get_db)):
-    return list(PRDetailsCRUD(db).search(project, status, skip, limit))
+    return list(PRDetailsCRUD(db).search(project, status, skip, limit, source_system))
 
 
-@pr.get("/by-ado/{repository_id}/{pull_request_id}", response_model=PRDetailsDetailResponse)
-def get_pr_by_ado(repository_id: str, pull_request_id: int, db: Session = Depends(get_db)):
+@pr.get("/by-source/{source_system}/{repository_id}/{pull_request_id}",
+        response_model=PRDetailsDetailResponse)
+def get_pr_by_source(source_system: str, repository_id: str, pull_request_id: int,
+                     db: Session = Depends(get_db)):
     crud = PRDetailsCRUD(db)
-    found = or_404(crud.get_by_ado(repository_id, pull_request_id), "Pull request")
+    found = or_404(crud.get_by_source(source_system, repository_id, pull_request_id),
+                   "Pull request")
     return crud.get_detail(found.id)
 
 
@@ -123,9 +127,5 @@ for cfg in (
     dict(prefix="/pr-comments", tag="PR comments", label="pr_comment", crud_cls=PRCommentCRUD,
          create_schema=PRCommentCreate, update_schema=PRCommentUpdate,
          response_schema=PRCommentResponse, list_by=("thread_id", "get_by_thread")),
-    dict(prefix="/llm-io-monitor", tag="LLM IO monitor", label="llm_io_monitor",
-         crud_cls=LLMIOMonitorCRUD, create_schema=LLMIOMonitorCreate,
-         update_schema=LLMIOMonitorUpdate, response_schema=LLMIOMonitorResponse,
-         list_by=("pr_details_id", "get_by_pr")),
 ):
     router.include_router(build_crud_router(**cfg))

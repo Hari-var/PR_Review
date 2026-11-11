@@ -13,7 +13,7 @@ class PR_Reviewer(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     pr_id: Mapped[int] = mapped_column(ForeignKey("pr_details.id", ondelete="CASCADE"), index=True)
     name: Mapped[Optional[str]] = mapped_column(String(255))
-    vote: Mapped[Optional[int]] = mapped_column(Integer)  # 10 approved, 5 w/ suggestions, 0 none, -5 waiting, -10 rejected
+    vote: Mapped[Optional[int]] = mapped_column(Integer)  # source-specific vote value; stored as sent
     is_required: Mapped[Optional[bool]] = mapped_column(Boolean)
 
     pr: Mapped["PR_Details"] = relationship(back_populates="reviewers")

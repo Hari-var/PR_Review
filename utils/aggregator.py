@@ -2,11 +2,13 @@
 import asyncio
 import datetime as dt
 import re
+from typing import Optional
 
 from markdownify import markdownify
 
 from .ado_client import AdoClient
 from .config import Settings
+from .constants import SOURCE_ADO
 from .docx_converter import convert_docx
 
 HTML_FIELDS = {
@@ -48,10 +50,12 @@ def _clean_comment(c):
             "created": c.get("createdDate"), "text_markdown": _html_to_md(c.get("text", ""))}
 
 
-async def _work_item(ado: AdoClient, cfg: Settings, project: str, wi_id: int, warnings: list):
+async def _work_item(ado: AdoClient, cfg: Settings, project: Optional[str], wi_id: int, warnings: list):
     raw = await ado.work_item(project, wi_id)
     f = raw.get("fields", {})
-    wi = {"id": wi_id, "url": raw.get("_links", {}).get("html", {}).get("href")}
+    project = project or f.get("System.TeamProject")   # needed for the comments API
+    wi = {"id": wi_id, "source_system": SOURCE_ADO, "project": project,
+          "url": raw.get("_links", {}).get("html", {}).get("href")}
     for k, name in PLAIN_FIELDS.items():
         if k in f:
             wi[name] = _person(f[k])
@@ -95,6 +99,20 @@ async def _work_item(ado: AdoClient, cfg: Settings, project: str, wi_id: int, wa
     return wi
 
 
+async def fetch_work_items(ado: AdoClient, cfg: Settings, wi_ids: list, project: Optional[str],
+                           warnings: list) -> list:
+    """Fetch work items (with comments and converted .docx attachments). Failures become warnings."""
+    results = await asyncio.gather(
+        *[_work_item(ado, cfg, project, int(i), warnings) for i in wi_ids], return_exceptions=True)
+    items = []
+    for i, res in zip(wi_ids, results):
+        if isinstance(res, Exception):
+            warnings.append(f"WI {i}: failed to fetch ({res}).")
+        else:
+            items.append(res)
+    return items
+
+
 async def extract_pr(ado: AdoClient, cfg: Settings, project: str, repo_id: str, pr_id: int) -> dict:
     warnings: list[str] = []
     pr, commits, threads, files, refs = await asyncio.gather(
@@ -107,6 +125,9 @@ async def extract_pr(ado: AdoClient, cfg: Settings, project: str, repo_id: str, 
 
     pull_request = {
         "id": pr_id,
+        "source_system": SOURCE_ADO,
+        "web_url": (f"{pr['repository']['webUrl']}/pullrequest/{pr_id}"
+                    if (pr.get("repository") or {}).get("webUrl") else None),
         "title": pr.get("title"),
         "description_markdown": pr.get("description") or "",
         "status": pr.get("status"),
@@ -140,14 +161,7 @@ async def extract_pr(ado: AdoClient, cfg: Settings, project: str, repo_id: str, 
         warnings.append("No work item is linked to this pull request.")
     elif len(refs) > 1:
         warnings.append(f"{len(refs)} work items are linked; all were processed.")
-    results = await asyncio.gather(
-        *[_work_item(ado, cfg, project, int(r["id"]), warnings) for r in refs],
-        return_exceptions=True)
-    for r, res in zip(refs, results):
-        if isinstance(res, Exception):
-            warnings.append(f"WI {r['id']}: failed to fetch ({res}).")
-        else:
-            work_items.append(res)
+    work_items = await fetch_work_items(ado, cfg, [r["id"] for r in refs], project, warnings)
 
     return {
         "meta": {"extracted_at": dt.datetime.now(dt.timezone.utc).isoformat(),

@@ -57,7 +57,9 @@ class AdoClient:
 
     # ---- Work items ---------------------------------------------------
     async def work_item(self, project, wi_id):
-        url = f"{self.org}/{quote(project)}/_apis/wit/workitems/{wi_id}"
+        """`project` may be None: work items can be read at organisation level."""
+        base = f"{self.org}/{quote(project)}" if project else self.org
+        url = f"{base}/_apis/wit/workitems/{wi_id}"
         return await self._json(url, **{"$expand": "all"})
 
     async def work_item_comments(self, project, wi_id):

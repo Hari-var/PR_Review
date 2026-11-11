@@ -25,25 +25,10 @@ def _partial(name: str, base: type[BaseModel]) -> type[BaseModel]:
     fields = {n: (Optional[f.annotation], None) for n, f in base.model_fields.items()}
     return create_model(name, **fields)  # type: ignore[call-overload]
 
-# ======================================================== LLM_IO_monitor
-class LLMIOMonitorBase(BaseModel):
-    prompt: str
-    response: str
 
-
-class LLMIOMonitorCreate(LLMIOMonitorBase):
-    pr_details_id: int
-
-
-LLMIOMonitorUpdate = _partial("LLMIOMonitorUpdate", LLMIOMonitorCreate)
-
-
-class LLMIOMonitorResponse(ORMModel, LLMIOMonitorBase):
-    # your model has no TimestampMixin, so no created_at/updated_at here
-    id: int
-    pr_details_id: int
 # =============================================================== PR_Details
 class PRDetailsBase(BaseModel):
+    source_system: str
     pull_request_id: int
     repository_id: str
     repository_name: Optional[str] = None
@@ -149,7 +134,7 @@ class PRCommentResponse(TimestampedResponse, PRCommentBase):
 
 
 class PRCommentThreadBase(BaseModel):
-    ado_thread_id: Optional[int] = None
+    external_id: Optional[str] = None
     status: Optional[str] = None
     file_path: Optional[str] = None
 
@@ -218,7 +203,7 @@ class WorkItemAttachmentDetailResponse(WorkItemAttachmentResponse):
 
 # ========================================================= WorkItem_Comment
 class WorkItemCommentBase(BaseModel):
-    ado_comment_id: Optional[int] = None
+    external_id: Optional[str] = None
     author: Optional[str] = None
     text_markdown: Optional[str] = None
     commented_at: Optional[datetime] = None
@@ -255,7 +240,8 @@ class WorkItemLinkResponse(TimestampedResponse, WorkItemLinkBase):
 
 # ======================================================== WorkItem_Details
 class WorkItemDetailsBase(BaseModel):
-    ado_work_item_id: int
+    source_system: str
+    external_id: str
     project: Optional[str] = None
     url: Optional[str] = None
     work_item_type: Optional[str] = None
@@ -268,8 +254,8 @@ class WorkItemDetailsBase(BaseModel):
     assigned_to_email: Optional[str] = None
     created_by_name: Optional[str] = None
     created_by_email: Optional[str] = None
-    ado_created_date: Optional[datetime] = None
-    ado_changed_date: Optional[datetime] = None
+    source_created_at: Optional[datetime] = None
+    source_updated_at: Optional[datetime] = None
     tags: Optional[str] = None
     area_path: Optional[str] = None
     iteration_path: Optional[str] = None
@@ -311,6 +297,12 @@ class PRWorkItemLinkResponse(ORMModel):
 
 
 # ======================================= Nested payloads for upsert (full extraction)
+class WorkItemRef(BaseModel):
+    """Points at a work item in any tracker."""
+    source_system: str
+    external_id: str
+
+
 class WorkItemAttachmentNested(WorkItemAttachmentBase):
     document: Optional[AttachmentDocumentBase] = None
 
@@ -330,8 +322,8 @@ class PRDetailsFullCreate(PRDetailsBase):
     commits: list[PRCommitBase] = Field(default_factory=list)
     changed_files: list[PRChangedFileBase] = Field(default_factory=list)
     comment_threads: list[PRCommentThreadNested] = Field(default_factory=list)
-    # ADO work item ids to link (items must already exist; upsert them first)
-    work_item_ado_ids: list[int] = Field(default_factory=list)
+    # work items to link (they must already exist; upsert them first)
+    work_item_refs: list[WorkItemRef] = Field(default_factory=list)
 
 
 class PRDetailsDetailResponse(PRDetailsResponse):
@@ -340,4 +332,21 @@ class PRDetailsDetailResponse(PRDetailsResponse):
     changed_files: list[PRChangedFileResponse] = Field(default_factory=list)
     comment_threads: list[PRCommentThreadDetailResponse] = Field(default_factory=list)
     work_items: list[WorkItemDetailsResponse] = Field(default_factory=list)
-    llm_response: list[LLMIOMonitorResponse] = Field(default_factory=list)
+
+
+# ======================================================== LLM_IO_monitor
+class LLMIOMonitorBase(BaseModel):
+    prompt: str
+    response: str
+
+
+class LLMIOMonitorCreate(LLMIOMonitorBase):
+    pr_details_id: int
+
+
+LLMIOMonitorUpdate = _partial("LLMIOMonitorUpdate", LLMIOMonitorCreate)
+
+
+class LLMIOMonitorResponse(ORMModel, LLMIOMonitorBase):
+    id: int
+    pr_details_id: int

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, Integer, String, Text
+from sqlalchemy import DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database.database import Base
@@ -10,9 +10,11 @@ from .mixins import TimestampMixin
 
 class WorkItem_Details(TimestampMixin, Base):
     __tablename__ = "work_item_details"
+    __table_args__ = (UniqueConstraint("source_system", "external_id", name="uq_wi_source_external"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    ado_work_item_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)  # ADO id (org-unique)
+    source_system: Mapped[str] = mapped_column(String(32), index=True)          # e.g. "azure_devops", "jira"
+    external_id: Mapped[str] = mapped_column(String(128), index=True)           # id/key on the source system
     project: Mapped[Optional[str]] = mapped_column(String(255))
     url: Mapped[Optional[str]] = mapped_column(String(1024))
 
@@ -26,8 +28,8 @@ class WorkItem_Details(TimestampMixin, Base):
     assigned_to_email: Mapped[Optional[str]] = mapped_column(String(255))
     created_by_name: Mapped[Optional[str]] = mapped_column(String(255))
     created_by_email: Mapped[Optional[str]] = mapped_column(String(255))
-    ado_created_date: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    ado_changed_date: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    source_created_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    source_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     tags: Mapped[Optional[str]] = mapped_column(String(1024))
     area_path: Mapped[Optional[str]] = mapped_column(String(512))
     iteration_path: Mapped[Optional[str]] = mapped_column(String(512))
